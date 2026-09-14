@@ -105,3 +105,12 @@ export const createApp = (): Express => {
 
   return app;
 };
+
+/**
+ * The single application instance. Vercel's Express runtime selects this module
+ * (the first entry file that imports express) and invokes its default export;
+ * src/server.ts reuses the same instance for local development and Node hosting.
+ */
+const app = createApp();
+
+export default app;
