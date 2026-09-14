@@ -11,9 +11,9 @@ dist
 *.log
 coverage
 .DS_Store
-uploads
-storage
-tmp
-temp
+/uploads/
+/storage/
+/tmp/
+/temp/
 
 *.tsbuildinfo

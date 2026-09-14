@@ -33,63 +33,116 @@ const integer = (fallback: number) =>
       return Number.isFinite(parsed) ? parsed : fallback;
     });
 
-const schema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: integer(4000),
-  PUBLIC_BASE_URL: z.string().url().default('http://localhost:4000'),
-  SITE_BASE_URL: z.string().url().default('http://localhost:5173'),
+/** Blank values (`KEY=` in a .env file) count as missing. */
+const optionalValue = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+  });
 
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+const CLOUDINARY_VARIABLES = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'] as const;
 
-  AUTH_JWT_SECRET: z.string().min(24, 'AUTH_JWT_SECRET must be at least 24 characters'),
-  AUTH_SESSION_TTL_HOURS: integer(12),
-  AUTH_COOKIE_NAME: z.string().default('mdb_admin_session'),
-  AUTH_COOKIE_DOMAIN: z.string().optional(),
-  AUTH_COOKIE_SAMESITE: z.enum(['none', 'lax', 'strict']).default('lax'),
-  IP_HASH_SALT: z.string().min(8).default('miandubai-local-salt'),
+const schema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: integer(4000),
+    PUBLIC_BASE_URL: z.string().url().default('http://localhost:4000'),
+    SITE_BASE_URL: z.string().url().default('http://localhost:5173'),
 
-  FRONTEND_ORIGIN: csv,
-  ADMIN_ORIGIN: csv,
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
-  MEDIA_STORAGE_DRIVER: z.enum(['filesystem']).default('filesystem'),
-  MEDIA_ROOT: z.string().min(1, 'MEDIA_ROOT is required'),
-  MEDIA_PUBLIC_URL: z.string().default(''),
-  MEDIA_MAX_UPLOAD_BYTES: integer(10 * 1024 * 1024),
+    AUTH_JWT_SECRET: z.string().min(24, 'AUTH_JWT_SECRET must be at least 24 characters'),
+    AUTH_SESSION_TTL_HOURS: integer(12),
+    AUTH_COOKIE_NAME: z.string().default('mdb_admin_session'),
+    AUTH_COOKIE_DOMAIN: z.string().optional(),
+    AUTH_COOKIE_SAMESITE: z.enum(['none', 'lax', 'strict']).default('lax'),
+    IP_HASH_SALT: z.string().min(8).default('miandubai-local-salt'),
 
-  FEATURE_NEWSLETTER: boolean,
+    FRONTEND_ORIGIN: csv,
+    ADMIN_ORIGIN: csv,
 
-  RATE_LIMIT_WINDOW_MS: integer(15 * 60 * 1000),
-  RATE_LIMIT_MAX: integer(600),
-  RATE_LIMIT_LOGIN_MAX: integer(10),
-  RATE_LIMIT_CONTACT_MAX: integer(5),
+    MEDIA_STORAGE_DRIVER: z.enum(['filesystem', 'cloudinary']).default('filesystem'),
+    /** Required only by the filesystem driver. */
+    MEDIA_ROOT: optionalValue,
+    MEDIA_PUBLIC_URL: z.string().default(''),
+    MEDIA_MAX_UPLOAD_BYTES: integer(10 * 1024 * 1024),
 
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-});
+    /** Required only by the cloudinary driver. */
+    CLOUDINARY_CLOUD_NAME: optionalValue,
+    CLOUDINARY_API_KEY: optionalValue,
+    CLOUDINARY_API_SECRET: optionalValue,
 
-const parsed = schema.safeParse(process.env);
+    FEATURE_NEWSLETTER: boolean,
 
-if (!parsed.success) {
-  const details = parsed.error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`);
-  throw new Error(`Invalid backend environment configuration:\n${details.join('\n')}`);
-}
+    RATE_LIMIT_WINDOW_MS: integer(15 * 60 * 1000),
+    RATE_LIMIT_MAX: integer(600),
+    RATE_LIMIT_LOGIN_MAX: integer(10),
+    RATE_LIMIT_CONTACT_MAX: integer(5),
 
-const raw = parsed.data;
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  })
+  .superRefine((value, ctx) => {
+    // Driver-specific requirements. Messages name the variable, never its value.
+    if (value.MEDIA_STORAGE_DRIVER === 'filesystem' && !value.MEDIA_ROOT) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MEDIA_ROOT'],
+        message: 'MEDIA_ROOT is required when MEDIA_STORAGE_DRIVER=filesystem',
+      });
+    }
+    if (value.MEDIA_STORAGE_DRIVER === 'cloudinary') {
+      for (const name of CLOUDINARY_VARIABLES) {
+        if (!value[name]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name} is required when MEDIA_STORAGE_DRIVER=cloudinary`,
+          });
+        }
+      }
+    }
+  });
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
 
-export const env = {
-  ...raw,
-  PUBLIC_BASE_URL: stripTrailingSlash(raw.PUBLIC_BASE_URL),
-  SITE_BASE_URL: stripTrailingSlash(raw.SITE_BASE_URL),
-  MEDIA_PUBLIC_URL: stripTrailingSlash(raw.MEDIA_PUBLIC_URL),
-  MEDIA_ROOT: path.resolve(raw.MEDIA_ROOT),
-  backendRoot,
-  isProduction: raw.NODE_ENV === 'production',
-  isTest: raw.NODE_ENV === 'test',
-  /** Origins allowed to make credentialed requests. */
-  allowedOrigins: [...new Set([...raw.FRONTEND_ORIGIN, ...raw.ADMIN_ORIGIN])],
-  /** Media is served by this backend only when no external URL is configured. */
-  servesMediaLocally: raw.MEDIA_PUBLIC_URL.trim() === '',
-} as const;
+/**
+ * Validates an environment source. Exported so the driver-specific rules can be
+ * tested without touching process.env or the local .env file.
+ */
+export const parseEnvironment = (source: NodeJS.ProcessEnv) => {
+  const parsed = schema.safeParse(source);
+
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`);
+    throw new Error(`Invalid backend environment configuration:\n${details.join('\n')}`);
+  }
+
+  const raw = parsed.data;
+  const mediaPublicUrl = stripTrailingSlash(raw.MEDIA_PUBLIC_URL);
+  /** Media is served by this backend only for the filesystem driver with no external URL configured. */
+  const servesMediaLocally = raw.MEDIA_STORAGE_DRIVER === 'filesystem' && mediaPublicUrl.trim() === '';
+
+  return {
+    ...raw,
+    PUBLIC_BASE_URL: stripTrailingSlash(raw.PUBLIC_BASE_URL),
+    SITE_BASE_URL: stripTrailingSlash(raw.SITE_BASE_URL),
+    MEDIA_PUBLIC_URL: mediaPublicUrl,
+    /** Absolute path for the filesystem driver; empty when cloudinary is used without one. */
+    MEDIA_ROOT: raw.MEDIA_ROOT ? path.resolve(raw.MEDIA_ROOT) : '',
+    backendRoot,
+    isProduction: raw.NODE_ENV === 'production',
+    isTest: raw.NODE_ENV === 'test',
+    /** Origins allowed to make credentialed requests. */
+    allowedOrigins: [...new Set([...raw.FRONTEND_ORIGIN, ...raw.ADMIN_ORIGIN])],
+    servesMediaLocally,
+    /** Where media is delivered from (logs / dashboard only — never a credential). */
+    mediaServedBy:
+      raw.MEDIA_STORAGE_DRIVER === 'cloudinary' ? 'cloudinary' : servesMediaLocally ? 'backend' : mediaPublicUrl,
+  } as const;
+};
+
+export const env = parseEnvironment(process.env);
 
 export type Env = typeof env;

@@ -143,7 +143,7 @@ export const getDashboardSummary = async () => {
     storage: {
       driver: env.MEDIA_STORAGE_DRIVER,
       external: true,
-      servedBy: env.servesMediaLocally ? 'backend' : env.MEDIA_PUBLIC_URL,
+      servedBy: env.mediaServedBy,
     },
   };
 };
