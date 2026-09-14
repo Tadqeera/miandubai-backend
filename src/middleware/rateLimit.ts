@@ -1,4 +1,6 @@
-import rateLimit, { type Options } from 'express-rate-limit';
+// Named import: type checkers that resolve the package's CommonJS declarations for this
+// ES module (Vercel's build) treat the default import as the non-callable module object.
+import { rateLimit, type Options } from 'express-rate-limit';
 import { env } from '../config/env.js';
 
 const shared: Partial<Options> = {

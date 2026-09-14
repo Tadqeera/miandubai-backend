@@ -1,7 +1,7 @@
 import express, { type Express } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import helmet from 'helmet';
+import helmetModule from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
@@ -10,6 +10,17 @@ import { apiLimiter } from './middleware/rateLimit.js';
 import { adminRouter } from './routes/admin.js';
 import { publicRouter } from './routes/public.js';
 import { seoRouter } from './routes/seo.js';
+
+/**
+ * Helmet's CommonJS type declarations describe its default export as the whole
+ * module object. Type checkers that resolve those declarations for this ES
+ * module (Vercel's build) then see it as non-callable (TS2349). At runtime the
+ * default export is the helmet function itself, so this selects that same
+ * function under either view of the types.
+ */
+type HelmetModule = typeof helmetModule;
+type HelmetFactory = HelmetModule extends { default: infer Factory } ? Factory : HelmetModule;
+const helmet = ('default' in helmetModule ? helmetModule.default : helmetModule) as HelmetFactory;
 
 export const createApp = (): Express => {
   const app = express();
