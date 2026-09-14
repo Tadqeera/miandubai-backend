@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ApiError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 import { SUPPORTED_LOCALES } from '../../lib/locale.js';
+import { notifyContactSubmission } from './notification.js';
 
 export const CONTACT_TOPICS = ['order', 'product', 'shipping', 'returns', 'wholesale', 'other'] as const;
 
@@ -47,7 +48,22 @@ export const submitContactMessage = async (
       ipHash: meta.ipHash,
       userAgent: meta.userAgent?.slice(0, 255) ?? null,
     },
-    select: { id: true },
+    select: { id: true, createdAt: true },
+  });
+
+  // Only once the row is saved, and never in the same transaction: a mail
+  // failure is logged inside and can neither undo nor fail the submission.
+  // Awaited because a serverless function may be frozen as soon as the
+  // response is sent, which would silently drop a fire-and-forget email.
+  await notifyContactSubmission({
+    id: message.id,
+    name: input.name,
+    email: input.email,
+    phone: input.phone,
+    topic: input.topic,
+    message: input.message,
+    locale: input.locale,
+    createdAt: message.createdAt,
   });
 
   return { id: message.id, accepted: true };

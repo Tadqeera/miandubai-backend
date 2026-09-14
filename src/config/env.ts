@@ -42,7 +42,50 @@ const optionalValue = z
     return trimmed ? trimmed : undefined;
   });
 
+/** An optional TCP port. Messages name the variable, never its value. */
+const optionalPort = (name: string) =>
+  optionalValue.transform((value, ctx) => {
+    if (value === undefined) return undefined;
+    const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${name} must be a whole number between 1 and 65535` });
+      return z.NEVER;
+    }
+    return port;
+  });
+
+/** An optional strict "true" / "false" flag. */
+const optionalStrictBoolean = (name: string) =>
+  optionalValue.transform((value, ctx) => {
+    if (value === undefined) return undefined;
+    const normalized = value.toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${name} must be "true" or "false"` });
+    return z.NEVER;
+  });
+
+const optionalEmail = (name: string) =>
+  optionalValue.refine((value) => value === undefined || z.string().email().safeParse(value).success, {
+    message: `${name} must be a valid email address`,
+  });
+
 const CLOUDINARY_VARIABLES = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'] as const;
+
+/**
+ * Contact-notification email is all-or-nothing: with none of these set it is
+ * switched off; once any of them is set, every one is required.
+ */
+export const EMAIL_VARIABLES = [
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_SECURE',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+  'SMTP_FROM_EMAIL',
+  'SMTP_FROM_NAME',
+  'CONTACT_NOTIFICATION_EMAIL',
+] as const;
 
 const schema = z
   .object({
@@ -74,6 +117,16 @@ const schema = z
     CLOUDINARY_API_KEY: optionalValue,
     CLOUDINARY_API_SECRET: optionalValue,
 
+    /** Contact notification email over SMTP (Hostinger in production). All-or-nothing. */
+    SMTP_HOST: optionalValue,
+    SMTP_PORT: optionalPort('SMTP_PORT'),
+    SMTP_SECURE: optionalStrictBoolean('SMTP_SECURE'),
+    SMTP_USER: optionalValue,
+    SMTP_PASSWORD: optionalValue,
+    SMTP_FROM_EMAIL: optionalEmail('SMTP_FROM_EMAIL'),
+    SMTP_FROM_NAME: optionalValue,
+    CONTACT_NOTIFICATION_EMAIL: optionalEmail('CONTACT_NOTIFICATION_EMAIL'),
+
     FEATURE_NEWSLETTER: boolean,
 
     RATE_LIMIT_WINDOW_MS: integer(15 * 60 * 1000),
@@ -103,9 +156,59 @@ const schema = z
         }
       }
     }
+    // A half-configured mailbox fails here rather than silently dropping notifications.
+    if (EMAIL_VARIABLES.some((name) => value[name] !== undefined)) {
+      for (const name of EMAIL_VARIABLES) {
+        if (value[name] === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name} is required when any SMTP_* or CONTACT_NOTIFICATION_EMAIL variable is set`,
+          });
+        }
+      }
+    }
   });
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
+
+/** Complete outgoing-email settings, or null when email notifications are switched off. */
+const toEmailConfig = (raw: z.infer<typeof schema>) => {
+  const {
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_SECURE,
+    SMTP_USER,
+    SMTP_PASSWORD,
+    SMTP_FROM_EMAIL,
+    SMTP_FROM_NAME,
+    CONTACT_NOTIFICATION_EMAIL,
+  } = raw;
+  if (
+    SMTP_HOST === undefined ||
+    SMTP_PORT === undefined ||
+    SMTP_SECURE === undefined ||
+    SMTP_USER === undefined ||
+    SMTP_PASSWORD === undefined ||
+    SMTP_FROM_EMAIL === undefined ||
+    SMTP_FROM_NAME === undefined ||
+    CONTACT_NOTIFICATION_EMAIL === undefined
+  ) {
+    return null;
+  }
+  return {
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    user: SMTP_USER,
+    password: SMTP_PASSWORD,
+    fromEmail: SMTP_FROM_EMAIL,
+    fromName: SMTP_FROM_NAME,
+    contactNotificationEmail: CONTACT_NOTIFICATION_EMAIL,
+  };
+};
+
+export type EmailConfig = NonNullable<ReturnType<typeof toEmailConfig>>;
 
 /**
  * Validates an environment source. Exported so the driver-specific rules can be
@@ -140,6 +243,8 @@ export const parseEnvironment = (source: NodeJS.ProcessEnv) => {
     /** Where media is delivered from (logs / dashboard only — never a credential). */
     mediaServedBy:
       raw.MEDIA_STORAGE_DRIVER === 'cloudinary' ? 'cloudinary' : servesMediaLocally ? 'backend' : mediaPublicUrl,
+    /** SMTP settings, or null when notifications are off. Holds the SMTP password: server-side only, never logged. */
+    email: toEmailConfig(raw),
   } as const;
 };
 

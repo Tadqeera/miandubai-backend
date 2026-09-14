@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import {
   app,
@@ -10,6 +10,11 @@ import {
   signIn,
   type Session,
 } from './helpers.js';
+
+// SMTP is blanked for the whole suite (vitest.config.ts). Mocked as well, so
+// these tests could never reach a real mail server even if that changed.
+const nodemailerMock = vi.hoisted(() => ({ createTransport: vi.fn() }));
+vi.mock('nodemailer', () => ({ default: nodemailerMock, createTransport: nodemailerMock.createTransport }));
 
 let session: Session;
 
@@ -118,12 +123,16 @@ describe('contact form', () => {
   };
 
   it('stores a valid submission without requiring SMTP', async () => {
-    await request(app).post('/api/v1/contact').send(valid).expect(201);
+    const response = await request(app).post('/api/v1/contact').send(valid).expect(201);
+    expect(response.body).toEqual({ data: { accepted: true } });
 
     const list = await authed(session).get('/api/v1/admin/messages').expect(200);
     expect(list.body.data.total).toBe(1);
     expect(list.body.data.items[0].name).toBe('Alex Rivera');
     expect(list.body.data.items[0].status).toBe('NEW');
+
+    // With SMTP absent, notifications are simply off: no transport is ever built.
+    expect(nodemailerMock.createTransport).not.toHaveBeenCalled();
   });
 
   it('rejects a missing name, a bad email, a short message and absent consent', async () => {
