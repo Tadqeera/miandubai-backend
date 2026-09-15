@@ -167,8 +167,9 @@ publicRouter.post(
       ipHash: hashIp(req),
       userAgent: req.get('user-agent'),
     });
-    // Messages are stored regardless of whether SMTP is configured.
-    res.status(201).json({ data: { accepted: result.accepted } });
+    // Messages are stored regardless of whether SMTP is configured; the second
+    // flag says whether the visitor's confirmation email was actually sent.
+    res.status(201).json({ data: { accepted: result.accepted, confirmationEmailSent: result.confirmationEmailSent } });
   }),
 );
 

@@ -9,7 +9,8 @@ export type ApiErrorCode =
   | 'PAYLOAD_TOO_LARGE'
   | 'UNSUPPORTED_MEDIA_TYPE'
   | 'TOO_MANY_REQUESTS'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | 'SERVICE_UNAVAILABLE';
 
 const statusByCode: Record<ApiErrorCode, number> = {
   BAD_REQUEST: 400,
@@ -23,6 +24,7 @@ const statusByCode: Record<ApiErrorCode, number> = {
   UNSUPPORTED_MEDIA_TYPE: 415,
   TOO_MANY_REQUESTS: 429,
   INTERNAL_ERROR: 500,
+  SERVICE_UNAVAILABLE: 503,
 };
 
 export class ApiError extends Error {

@@ -3,8 +3,13 @@ import request from 'supertest';
 import { EMAIL_VARIABLES, parseEnvironment } from '../src/config/env.js';
 import { logger } from '../src/lib/logger.js';
 import { prisma } from '../src/lib/prisma.js';
-import { escapeHtml, renderContactNotification } from '../src/modules/contact/notification.js';
-import { app, closeDatabase, resetDatabase } from './helpers.js';
+import { invalidateSettingsCache } from '../src/modules/settings/service.js';
+import {
+  escapeHtml,
+  renderContactAcknowledgement,
+  renderContactNotification,
+} from '../src/modules/contact/notification.js';
+import { app, closeDatabase, resetDatabase, setTestSettings } from './helpers.js';
 
 // Placeholder values only — real credentials never belong in tests. vi.hoisted
 // runs before the imports above, so src/config/env.ts parses these values.
@@ -49,6 +54,18 @@ const errorMessageOf = (run: () => unknown): string => {
   }
   return '';
 };
+
+interface SentMail {
+  from: { name: string; address: string };
+  to: string;
+  replyTo?: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+
+const sentMails = () => nodemailerMock.sendMail.mock.calls.map((call) => call[0] as SentMail);
+const mailTo = (address: string) => sentMails().find((mail) => mail.to === address);
 
 describe('contact notification email configuration', () => {
   it('switches notifications off, without error, when no SMTP variable is set', () => {
@@ -188,9 +205,47 @@ describe('contact notification content', () => {
     expect(text).not.toContain('Phone:');
     expect(html).not.toContain('tel:');
   });
+
+  it('writes a short acknowledgement with a plain-text version in each language', () => {
+    const cases = [
+      ['en', 'Thank you for contacting Mian Dubai', 'a member of our team will reply personally', 'Wholesale or stockist'],
+      ['fr', 'Merci d’avoir contacté Mian Dubai', 'vous répondra personnellement', 'Revente ou distribution'],
+      ['es', 'Gracias por contactar con Mian Dubai', 'le responderá personalmente', 'Mayorista o distribución'],
+    ] as const;
+
+    for (const [locale, subject, promise, topic] of cases) {
+      const mail = renderContactAcknowledgement({ id: 42, topic: 'wholesale', locale, whatsappUrl: null, siteHost: 'miandubai.com' });
+      expect(mail.subject).toBe(subject);
+      expect(mail.text).toContain(promise);
+      expect(mail.text).toContain('#42');
+      expect(mail.text).toContain(topic);
+      expect(mail.text).toContain('WhatsApp');
+      expect(mail.text).toContain('miandubai.com');
+      expect(mail.html).toContain(`<html lang="${locale}">`);
+      expect(mail.html).not.toContain('wa.me');
+    }
+
+    // An unknown language falls back to English.
+    expect(renderContactAcknowledgement({ id: 1, topic: 'order', locale: 'de', whatsappUrl: null, siteHost: 'miandubai.com' }).subject).toBe(
+      'Thank you for contacting Mian Dubai',
+    );
+  });
+
+  it('offers the business WhatsApp link in the acknowledgement when one exists', () => {
+    const mail = renderContactAcknowledgement({
+      id: 7,
+      topic: 'order',
+      locale: 'en',
+      whatsappUrl: 'https://wa.me/15550100000',
+      siteHost: 'miandubai.com',
+    });
+    expect(mail.html).toContain('href="https://wa.me/15550100000"');
+    expect(mail.html).toContain('Message us on WhatsApp');
+    expect(mail.text).toContain('https://wa.me/15550100000');
+  });
 });
 
-describe('contact form notification email', () => {
+describe('contact form emails', () => {
   const valid = {
     name: 'Alex Rivera',
     email: 'alex@example.test',
@@ -201,8 +256,21 @@ describe('contact form notification email', () => {
     consent: true,
   };
 
+  const authPlain = Buffer.from(` ${SMTP.SMTP_USER} ${SMTP.SMTP_PASSWORD}`).toString('base64');
+  const smtpFailure = () =>
+    Object.assign(
+      new Error(`Invalid login: 535 5.7.8 authentication failed for ${SMTP.SMTP_USER} ${SMTP.SMTP_PASSWORD} ${authPlain}`),
+      { code: 'EAUTH', responseCode: 535, command: 'AUTH PLAIN' },
+    );
+
   /** vi.spyOn spies to undo after each test. vi.restoreAllMocks would also wipe the nodemailer call history. */
   const spies: Array<{ mockRestore: () => void }> = [];
+
+  const silenceErrors = () => {
+    const errorLog = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    spies.push(errorLog);
+    return errorLog;
+  };
 
   beforeAll(resetDatabase);
 
@@ -220,25 +288,42 @@ describe('contact form notification email', () => {
     await closeDatabase();
   });
 
-  it('saves the message, then sends exactly one notification from the configured mailbox', async () => {
+  it('saves the message, then emails the team and the customer from the configured mailbox', async () => {
     const response = await request(app).post('/api/v1/contact').send(valid).expect(201);
-    expect(response.body).toEqual({ data: { accepted: true } });
+    expect(response.body).toEqual({ data: { accepted: true, confirmationEmailSent: true } });
 
     const rows = await prisma.contactMessage.findMany();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ name: 'Alex Rivera', email: 'alex@example.test', topic: 'order', status: 'NEW' });
 
-    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(1);
-    const mail = nodemailerMock.sendMail.mock.calls[0]?.[0];
-    expect(mail).toMatchObject({
+    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(2);
+
+    // To the team: Reply-To the customer, so pressing Reply answers them.
+    const notification = mailTo(SMTP.CONTACT_NOTIFICATION_EMAIL);
+    expect(notification).toMatchObject({
       from: { name: SMTP.SMTP_FROM_NAME, address: SMTP.SMTP_FROM_EMAIL },
       to: SMTP.CONTACT_NOTIFICATION_EMAIL,
       replyTo: valid.email,
       subject: 'New Mian Dubai Enquiry — Alex Rivera',
     });
-    expect(mail.text).toContain(valid.message);
-    expect(mail.text).toContain(`Reference: #${rows[0]!.id}`);
-    expect(mail.html).toContain('Alex Rivera');
+    expect(notification?.text).toContain(valid.message);
+    expect(notification?.text).toContain(`Reference: #${rows[0]!.id}`);
+    expect(notification?.html).toContain('Alex Rivera');
+
+    // To the customer: from and Reply-To the Mian Dubai mailbox.
+    const acknowledgement = mailTo(valid.email);
+    expect(acknowledgement).toMatchObject({
+      from: { name: SMTP.SMTP_FROM_NAME, address: SMTP.SMTP_FROM_EMAIL },
+      to: valid.email,
+      replyTo: SMTP.SMTP_FROM_EMAIL,
+      subject: 'Thank you for contacting Mian Dubai',
+    });
+    expect(acknowledgement?.text).toContain('a member of our team will reply personally');
+    expect(acknowledgement?.text).toContain(`#${rows[0]!.id}`);
+    expect(acknowledgement?.html).toContain('Thank you for contacting Mian Dubai.');
+
+    // No other address is ever involved.
+    expect(sentMails().map((mail) => mail.to).sort()).toEqual([valid.email, SMTP.CONTACT_NOTIFICATION_EMAIL].sort());
 
     expect(nodemailerMock.createTransport).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -250,60 +335,110 @@ describe('contact form notification email', () => {
     );
   });
 
-  it('reuses one transporter rather than creating one per request', async () => {
+  it('reuses one transporter rather than creating one per email or request', async () => {
     await request(app).post('/api/v1/contact').send(valid).expect(201);
 
-    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(1);
+    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(2);
     expect(nodemailerMock.createTransport).toHaveBeenCalledTimes(1);
   });
 
-  it('escapes visitor HTML in the delivered email', async () => {
+  it('writes the acknowledgement in the language the form was sent in', async () => {
+    await request(app).post('/api/v1/contact').send({ ...valid, locale: 'es', topic: 'returns' }).expect(201);
+
+    const acknowledgement = mailTo(valid.email);
+    expect(acknowledgement?.subject).toBe('Gracias por contactar con Mian Dubai');
+    expect(acknowledgement?.text).toContain('Una devolución');
+    expect(acknowledgement?.html).toContain('<html lang="es">');
+    // The team's copy stays in English.
+    expect(mailTo(SMTP.CONTACT_NOTIFICATION_EMAIL)?.text).toContain('Language: Spanish');
+  });
+
+  it('adds the business WhatsApp link to the acknowledgement when a number is configured', async () => {
+    await setTestSettings({ 'contact.whatsappNumber': '+1 555 010 0000' });
+    invalidateSettingsCache();
+    try {
+      await request(app).post('/api/v1/contact').send(valid).expect(201);
+      expect(mailTo(valid.email)?.html).toContain('href="https://wa.me/15550100000"');
+    } finally {
+      await setTestSettings({ 'contact.whatsappNumber': '' });
+      invalidateSettingsCache();
+    }
+  });
+
+  it('never repeats what the visitor typed in the acknowledgement, so the form cannot relay content', async () => {
+    const pitch = 'Claim your prize at https://prize.example.test today';
+    await request(app)
+      .post('/api/v1/contact')
+      .send({ ...valid, name: `Winner ${pitch}`.slice(0, 120), message: `${pitch}. ${pitch}.` })
+      .expect(201);
+
+    const acknowledgement = mailTo(valid.email);
+    for (const part of [acknowledgement?.subject, acknowledgement?.text, acknowledgement?.html]) {
+      expect(part).not.toContain('prize.example.test');
+      expect(part).not.toContain('Winner');
+    }
+    // The team's copy still carries the whole enquiry.
+    expect(mailTo(SMTP.CONTACT_NOTIFICATION_EMAIL)?.text).toContain(pitch);
+  });
+
+  it('escapes visitor HTML in the team notification', async () => {
     await request(app)
       .post('/api/v1/contact')
       .send({ ...valid, name: '<script>alert(1)</script>', message: '<img src=x onerror=alert(1)>\nline two of the note' })
       .expect(201);
 
-    const mail = nodemailerMock.sendMail.mock.calls[0]?.[0];
-    expect(mail.html).not.toContain('<script');
-    expect(mail.html).not.toContain('<img');
-    expect(mail.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    expect(mail.html).toContain('&lt;img src=x onerror=alert(1)&gt;<br>line two of the note');
+    const notification = mailTo(SMTP.CONTACT_NOTIFICATION_EMAIL);
+    expect(notification?.html).not.toContain('<script');
+    expect(notification?.html).not.toContain('<img');
+    expect(notification?.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(notification?.html).toContain('&lt;img src=x onerror=alert(1)&gt;<br>line two of the note');
   });
 
-  it('sends nothing for a honeypot submission, which is never stored', async () => {
+  it('refuses a malformed or multi-recipient address before anything is saved or sent', async () => {
     const before = await prisma.contactMessage.count();
-    await request(app).post('/api/v1/contact').send({ ...valid, company: 'bot-filled-this' }).expect(201);
+
+    for (const email of [
+      'alex@example.test, victim@example.test',
+      'alex@example.test\r\nBcc: victim@example.test',
+      'Alex <alex@example.test>',
+      'not-an-address',
+    ]) {
+      await request(app).post('/api/v1/contact').send({ ...valid, email }).expect(422);
+    }
 
     expect(await prisma.contactMessage.count()).toBe(before);
     expect(nodemailerMock.sendMail).not.toHaveBeenCalled();
   });
 
-  it('keeps the saved message and still answers 201 when SMTP delivery fails, logging no secrets', async () => {
-    const authPlain = Buffer.from(`\u0000${SMTP.SMTP_USER}\u0000${SMTP.SMTP_PASSWORD}`).toString('base64');
-    nodemailerMock.sendMail.mockRejectedValueOnce(
-      Object.assign(
-        new Error(`Invalid login: 535 5.7.8 authentication failed for ${SMTP.SMTP_USER} ${SMTP.SMTP_PASSWORD} ${authPlain}`),
-        { code: 'EAUTH', responseCode: 535, command: 'AUTH PLAIN' },
-      ),
+  it('sends nothing for a honeypot submission, which is never stored', async () => {
+    const before = await prisma.contactMessage.count();
+    const response = await request(app).post('/api/v1/contact').send({ ...valid, company: 'bot-filled-this' }).expect(201);
+
+    expect(response.body.data.accepted).toBe(true);
+    expect(await prisma.contactMessage.count()).toBe(before);
+    expect(nodemailerMock.sendMail).not.toHaveBeenCalled();
+  });
+
+  it('keeps the message and still confirms to the customer when only the team notification fails, logging no secrets', async () => {
+    nodemailerMock.sendMail.mockImplementation((mail: SentMail) =>
+      mail.to === SMTP.CONTACT_NOTIFICATION_EMAIL ? Promise.reject(smtpFailure()) : Promise.resolve({ messageId: '<ok>' }),
     );
-    const errorLog = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
-    spies.push(errorLog);
+    const errorLog = silenceErrors();
     const customerMessage = 'Please call me back about wholesale pricing for my boutique.';
     const before = await prisma.contactMessage.count();
 
     const response = await request(app).post('/api/v1/contact').send({ ...valid, message: customerMessage }).expect(201);
 
-    expect(response.body).toEqual({ data: { accepted: true } });
-    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(1);
+    expect(response.body).toEqual({ data: { accepted: true, confirmationEmailSent: true } });
+    expect(nodemailerMock.sendMail).toHaveBeenCalledTimes(2);
 
     expect(await prisma.contactMessage.count()).toBe(before + 1);
     const saved = await prisma.contactMessage.findFirst({ where: { message: customerMessage } });
-    expect(saved).not.toBeNull();
     expect(saved?.status).toBe('NEW');
 
     expect(errorLog).toHaveBeenCalledTimes(1);
     const [payload, text] = errorLog.mock.calls[0] as unknown as [Record<string, unknown>, string];
-    expect(text).toContain('the message is saved in the database');
+    expect(text).toBe('Contact notification email failed; the message is saved in the database');
     expect(payload).toMatchObject({ contactMessageId: saved!.id, mailError: { code: 'EAUTH', responseCode: 535 } });
 
     const logged = JSON.stringify(errorLog.mock.calls);
@@ -312,6 +447,39 @@ describe('contact form notification email', () => {
     expect(logged).not.toContain(SMTP.SMTP_USER);
     expect(logged).not.toContain(authPlain);
     expect(logged).not.toContain(customerMessage);
+    expect(logged).not.toContain(valid.email);
+  });
+
+  it('reports honestly when the customer acknowledgement fails but the team was notified', async () => {
+    nodemailerMock.sendMail.mockImplementation((mail: SentMail) =>
+      mail.to === valid.email
+        ? Promise.reject(Object.assign(new Error('550 5.1.1 Recipient address rejected'), { code: 'EENVELOPE', responseCode: 550 }))
+        : Promise.resolve({ messageId: '<ok>' }),
+    );
+    const errorLog = silenceErrors();
+    const infoLog = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    spies.push(infoLog);
+
+    const response = await request(app).post('/api/v1/contact').send(valid).expect(201);
+
+    expect(response.body).toEqual({ data: { accepted: true, confirmationEmailSent: false } });
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog.mock.calls[0]?.[1]).toBe('Customer acknowledgement email failed; the team notification is unaffected');
+    expect(infoLog.mock.calls.map((call) => call[1])).toContain('Contact notification email sent');
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(valid.email);
+  });
+
+  it('still accepts the enquiry when both emails fail, and says no confirmation was sent', async () => {
+    nodemailerMock.sendMail.mockRejectedValue(smtpFailure());
+    const errorLog = silenceErrors();
+    const before = await prisma.contactMessage.count();
+
+    const response = await request(app).post('/api/v1/contact').send(valid).expect(201);
+
+    expect(response.body).toEqual({ data: { accepted: true, confirmationEmailSent: false } });
+    expect(await prisma.contactMessage.count()).toBe(before + 1);
+    expect(errorLog).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(SMTP.SMTP_PASSWORD);
   });
 
   it('keeps the existing failure response when the database write fails, and sends no email', async () => {

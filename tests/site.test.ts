@@ -137,7 +137,8 @@ describe('contact form', () => {
 
   it('stores a valid submission without requiring SMTP', async () => {
     const response = await request(app).post('/api/v1/contact').send(valid).expect(201);
-    expect(response.body).toEqual({ data: { accepted: true } });
+    // Nothing is claimed that did not happen: with SMTP off, no confirmation email went out.
+    expect(response.body).toEqual({ data: { accepted: true, confirmationEmailSent: false } });
 
     const list = await authed(session).get('/api/v1/admin/messages').expect(200);
     expect(list.body.data.total).toBe(1);

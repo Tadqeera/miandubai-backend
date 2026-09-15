@@ -268,4 +268,152 @@ describe('product catalog', () => {
     expect(copy.body.data.stockQuantity).toBe(0);
     expect(copy.body.data.sku).not.toBe('MD-TEST-010');
   });
+
+  describe('editing an existing product', () => {
+    const ZAR_KHADRA = 'Zar Khadra Extrait de Parfum 80ml';
+    let mediaIds: number[] = [];
+
+    const findZarKhadra = async () => {
+      const admin = await authed(session).get('/api/v1/admin/products?q=ZK-EXTRAIT-80').expect(200);
+      return admin.body.data.items[0] as {
+        id: number;
+        slug: string;
+        sku: string;
+        publishedAt: string;
+        images: Array<{ mediaAssetId: number; isPrimary: boolean; sortOrder: number }>;
+        translations: Array<{ locale: string; name: string }>;
+      };
+    };
+
+    /** What the editor sends back for a loaded product: the same record, plus the edit. */
+    const resend = (product: Awaited<ReturnType<typeof findZarKhadra>>, overrides: Record<string, unknown> = {}) =>
+      productPayload({
+        slug: product.slug,
+        sku: product.sku,
+        sizeMl: 80,
+        fragranceType: 'EXTRAIT_DE_PARFUM',
+        images: product.images.map(({ mediaAssetId, isPrimary, sortOrder }) => ({ mediaAssetId, isPrimary, sortOrder })),
+        translations: product.translations.map(({ locale, name }) => ({ locale, name })),
+        ...overrides,
+      });
+
+    beforeAll(async () => {
+      mediaIds = [await uploadImage(), await uploadImage(), await uploadImage()];
+      await authed(session)
+        .post('/api/v1/admin/products')
+        .send(
+          productPayload({
+            sku: 'ZK-EXTRAIT-80',
+            sizeMl: 80,
+            fragranceType: 'EXTRAIT_DE_PARFUM',
+            status: 'PUBLISHED',
+            images: mediaIds.map((mediaAssetId, index) => ({ mediaAssetId, isPrimary: index === 0, sortOrder: index })),
+            translations: [
+              { locale: 'en', name: ZAR_KHADRA },
+              { locale: 'fr', name: 'Zar Khadra Extrait de Parfum 80 ml' },
+              { locale: 'es', name: 'Zar Khadra Extrait de Parfum 80 ml' },
+            ],
+          }),
+        )
+        .expect(201);
+    });
+
+    it('publishes an edit with its images attached, without conflicting with its own SKU or slug', async () => {
+      const product = await findZarKhadra();
+
+      const published = await authed(session)
+        .put(`/api/v1/admin/products/${product.id}`)
+        .send(resend(product, { status: 'PUBLISHED', stockQuantity: 7 }))
+        .expect(200);
+
+      expect(published.body.data).toMatchObject({
+        id: product.id,
+        slug: 'zar-khadra-extrait-de-parfum-80ml',
+        sku: 'ZK-EXTRAIT-80',
+        status: 'PUBLISHED',
+        stockQuantity: 7,
+        publishedAt: product.publishedAt,
+      });
+      expect(published.body.data.images.map((image: { mediaAssetId: number }) => image.mediaAssetId)).toEqual(mediaIds);
+      expect(published.body.data.translations).toHaveLength(3);
+
+      const detail = await request(app).get('/api/v1/products/zar-khadra-extrait-de-parfum-80ml?locale=fr').expect(200);
+      expect(detail.body.data.name).toBe('Zar Khadra Extrait de Parfum 80 ml');
+      expect(detail.body.data.images).toHaveLength(3);
+    });
+
+    it('saves the same product as a draft and keeps every image', async () => {
+      const product = await findZarKhadra();
+
+      const draft = await authed(session)
+        .put(`/api/v1/admin/products/${product.id}`)
+        .send(resend(product, { status: 'DRAFT' }))
+        .expect(200);
+
+      expect(draft.body.data.status).toBe('DRAFT');
+      expect(draft.body.data.images).toHaveLength(3);
+      await request(app).get('/api/v1/products/zar-khadra-extrait-de-parfum-80ml?locale=en').expect(404);
+    });
+
+    it('applies a new image order, primary image and removal exactly as sent', async () => {
+      const product = await findZarKhadra();
+      const [first, second, third] = mediaIds;
+
+      const response = await authed(session)
+        .put(`/api/v1/admin/products/${product.id}`)
+        .send(
+          resend(product, {
+            images: [
+              { mediaAssetId: third, isPrimary: true, sortOrder: 0, altEn: 'Front of the bottle' },
+              { mediaAssetId: first, isPrimary: false, sortOrder: 1 },
+            ],
+          }),
+        )
+        .expect(200);
+
+      expect(
+        response.body.data.images.map((image: { mediaAssetId: number; isPrimary: boolean; altEn: string | null }) => [
+          image.mediaAssetId,
+          image.isPrimary,
+          image.altEn,
+        ]),
+      ).toEqual([
+        [third, true, 'Front of the bottle'],
+        [first, false, null],
+      ]);
+
+      // Detaching an image never deletes it from the media library.
+      const media = await authed(session).get('/api/v1/admin/media?pageSize=200').expect(200);
+      expect(media.body.data.items.map((item: { id: number }) => item.id)).toContain(second);
+    });
+
+    it('explains a SKU that belongs to another product, pointing at the field', async () => {
+      const product = await findZarKhadra();
+
+      const response = await authed(session)
+        .put(`/api/v1/admin/products/${product.id}`)
+        .send(resend(product, { sku: 'MD-TEST-001' }))
+        .expect(409);
+
+      expect(response.body.error.code).toBe('CONFLICT');
+      expect(response.body.error.message).toBe('Another product already uses the SKU "MD-TEST-001".');
+      expect(response.body.error.details).toEqual([expect.objectContaining({ field: 'sku' })]);
+    });
+
+    it('names an image that is no longer in the media library instead of failing generically', async () => {
+      const product = await findZarKhadra();
+
+      const response = await authed(session)
+        .put(`/api/v1/admin/products/${product.id}`)
+        .send(resend(product, { images: [{ mediaAssetId: 987_654, isPrimary: true, sortOrder: 0 }] }))
+        .expect(422);
+
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(response.body.error.details).toEqual([expect.objectContaining({ field: 'images' })]);
+
+      // Nothing was written: the product still has its images.
+      const after = await findZarKhadra();
+      expect(after.images).toHaveLength(2);
+    });
+  });
 });

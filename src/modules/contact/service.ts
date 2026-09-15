@@ -1,9 +1,10 @@
 import type { ContactStatus, Prisma } from '@prisma/client';
 import { z } from 'zod';
+import { env } from '../../config/env.js';
 import { ApiError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 import { SUPPORTED_LOCALES } from '../../lib/locale.js';
-import { notifyContactSubmission } from './notification.js';
+import { deliverContactEmails } from './notification.js';
 
 export const CONTACT_TOPICS = ['order', 'product', 'shipping', 'returns', 'wholesale', 'other'] as const;
 
@@ -33,8 +34,9 @@ export const submitContactMessage = async (
   meta: { ipHash: string; userAgent?: string },
 ) => {
   if (input.company && input.company.trim() !== '') {
-    // Silently accept so the bot has nothing to learn, but store nothing.
-    return { id: null, accepted: true };
+    // Silently accept so the bot has nothing to learn — the same answer a real
+    // submission would get — but store and send nothing.
+    return { id: null, accepted: true, confirmationEmailSent: env.email !== null };
   }
 
   const message = await prisma.contactMessage.create({
@@ -55,7 +57,7 @@ export const submitContactMessage = async (
   // failure is logged inside and can neither undo nor fail the submission.
   // Awaited because a serverless function may be frozen as soon as the
   // response is sent, which would silently drop a fire-and-forget email.
-  await notifyContactSubmission({
+  const delivery = await deliverContactEmails({
     id: message.id,
     name: input.name,
     email: input.email,
@@ -66,7 +68,8 @@ export const submitContactMessage = async (
     createdAt: message.createdAt,
   });
 
-  return { id: message.id, accepted: true };
+  // The storefront only mentions a confirmation email when one really went out.
+  return { id: message.id, accepted: true, confirmationEmailSent: delivery.acknowledgement === 'sent' };
 };
 
 export const listContactMessages = async (params: { page: number; pageSize: number; status?: ContactStatus }) => {

@@ -37,6 +37,9 @@ const ARTWORK = [
   'contactuspagemiandubaiheroimage',
   'legalpagemiandubaiheroimage',
   'footermaindubai',
+  'miandubaiblog1',
+  'miandubaiblog2',
+  'miandubaiblog3',
 ];
 const ARTWORK_WIDTHS = [640, 1280, 1920];
 

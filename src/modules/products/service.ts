@@ -307,11 +307,104 @@ const slugExists = (candidate: string, excludeId?: number) =>
     .findFirst({ where: { slug: candidate, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { id: true } })
     .then((row) => row !== null);
 
+/**
+ * SKUs are unique across every product, archived and soft-deleted ones
+ * included. Checked up front so the editor can point at the field; the unique
+ * index still guards against a race. A product's own SKU is never "taken".
+ */
+const assertSkuAvailable = async (sku: string, excludeId?: number) => {
+  const owner = await prisma.product.findFirst({
+    where: { sku, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { id: true },
+  });
+  if (owner) {
+    throw ApiError.conflict(`Another product already uses the SKU "${sku}".`, [
+      {
+        field: 'sku',
+        message: 'This SKU belongs to another product (archived and deleted products included). Choose a different one.',
+      },
+    ]);
+  }
+};
+
+const unique = (ids: number[]) => [...new Set(ids)];
+
+const idsNotFound = (wanted: number[], rows: Array<{ id: number }>) => {
+  const found = new Set(rows.map((row) => row.id));
+  return wanted.filter((id) => !found.has(id));
+};
+
+/**
+ * Images, categories and collections are referenced by id. One removed since
+ * the editor was opened would otherwise surface as a foreign-key failure with
+ * no hint of which part of the form is at fault.
+ */
+const assertReferencesExist = async (input: ProductWriteInput) => {
+  const mediaIds = unique(input.images.map((image) => image.mediaAssetId));
+  const categoryIds = unique(input.categoryIds);
+  const collectionIds = unique(input.collectionIds);
+
+  const [media, categories, collections] = await Promise.all([
+    mediaIds.length > 0 ? prisma.mediaAsset.findMany({ where: { id: { in: mediaIds } }, select: { id: true } }) : [],
+    categoryIds.length > 0 ? prisma.category.findMany({ where: { id: { in: categoryIds } }, select: { id: true } }) : [],
+    collectionIds.length > 0
+      ? prisma.collection.findMany({ where: { id: { in: collectionIds } }, select: { id: true } })
+      : [],
+  ]);
+
+  const problems: PublishProblem[] = [];
+  const missingMedia = idsNotFound(mediaIds, media);
+  if (missingMedia.length > 0) {
+    const one = missingMedia.length === 1;
+    problems.push({
+      field: 'images',
+      message: `${one ? 'One image is' : `${missingMedia.length} images are`} no longer in the media library. Remove ${one ? 'it' : 'them'} from this product and upload again.`,
+    });
+  }
+  if (idsNotFound(categoryIds, categories).length > 0) {
+    problems.push({ field: 'categoryIds', message: 'A selected category has been deleted. Untick it and save again.' });
+  }
+  if (idsNotFound(collectionIds, collections).length > 0) {
+    problems.push({ field: 'collectionIds', message: 'A selected collection has been deleted. Untick it and save again.' });
+  }
+  if (problems.length > 0) throw ApiError.validation('Some items linked to this product are no longer available.', problems);
+};
+
+/** The product's own columns, shared by create and update. */
+const productScalars = (input: ProductWriteInput) => ({
+  sku: input.sku.trim(),
+  brandName: input.brandName,
+  status: input.status,
+  fragranceType: input.fragranceType,
+  audience: input.audience,
+  sizeMl: input.sizeMl,
+  priceUsd: new Prisma.Decimal(input.priceUsd),
+  priceAed: input.priceAed ? new Prisma.Decimal(input.priceAed) : null,
+  compareAtPriceUsd: input.compareAtPriceUsd ? new Prisma.Decimal(input.compareAtPriceUsd) : null,
+  compareAtPriceAed: input.compareAtPriceAed ? new Prisma.Decimal(input.compareAtPriceAed) : null,
+  stockQuantity: input.stockQuantity,
+  lowStockThreshold: input.lowStockThreshold,
+  processingMinDays: input.processingMinDays,
+  processingMaxDays: input.processingMaxDays,
+  deliveryMinDays: input.deliveryMinDays,
+  deliveryMaxDays: input.deliveryMaxDays,
+  ingredients: input.ingredients,
+  featured: input.featured,
+  bestseller: input.bestseller,
+  newArrival: input.newArrival,
+  allowWhatsAppOrder: input.allowWhatsAppOrder,
+  sortOrder: input.sortOrder,
+  model3dGlbUrl: input.model3dGlbUrl,
+  model3dUsdzUrl: input.model3dUsdzUrl,
+});
+
 export const createProduct = async (input: ProductWriteInput, allowWithoutImage: boolean) => {
   if (input.status === 'PUBLISHED') {
     const problems = validateForPublish(input, allowWithoutImage);
     if (problems.length > 0) throw ApiError.validation('This product cannot be published yet.', problems);
   }
+
+  await Promise.all([assertSkuAvailable(input.sku.trim()), assertReferencesExist(input)]);
 
   const englishName = input.translations.find((row) => row.locale === DEFAULT_LOCALE)?.name ?? input.sku;
   const slug = await uniqueSlug(input.slug ?? englishName, (candidate) => slugExists(candidate));
@@ -319,35 +412,12 @@ export const createProduct = async (input: ProductWriteInput, allowWithoutImage:
   const product = await prisma.product.create({
     data: {
       slug,
-      sku: input.sku.trim(),
-      brandName: input.brandName,
-      status: input.status,
-      fragranceType: input.fragranceType,
-      audience: input.audience,
-      sizeMl: input.sizeMl,
-      priceUsd: new Prisma.Decimal(input.priceUsd),
-      priceAed: input.priceAed ? new Prisma.Decimal(input.priceAed) : null,
-      compareAtPriceUsd: input.compareAtPriceUsd ? new Prisma.Decimal(input.compareAtPriceUsd) : null,
-      compareAtPriceAed: input.compareAtPriceAed ? new Prisma.Decimal(input.compareAtPriceAed) : null,
-      stockQuantity: input.stockQuantity,
-      lowStockThreshold: input.lowStockThreshold,
-      processingMinDays: input.processingMinDays,
-      processingMaxDays: input.processingMaxDays,
-      deliveryMinDays: input.deliveryMinDays,
-      deliveryMaxDays: input.deliveryMaxDays,
-      ingredients: input.ingredients,
-      featured: input.featured,
-      bestseller: input.bestseller,
-      newArrival: input.newArrival,
-      allowWhatsAppOrder: input.allowWhatsAppOrder,
-      sortOrder: input.sortOrder,
-      model3dGlbUrl: input.model3dGlbUrl,
-      model3dUsdzUrl: input.model3dUsdzUrl,
+      ...productScalars(input),
       publishedAt: input.status === 'PUBLISHED' ? new Date() : null,
       translations: { create: translationRows(input.translations) },
       images: { create: normalizeImages(input.images) },
-      categories: { create: input.categoryIds.map((categoryId) => ({ categoryId })) },
-      collections: { create: input.collectionIds.map((collectionId) => ({ collectionId })) },
+      categories: { create: unique(input.categoryIds).map((categoryId) => ({ categoryId })) },
+      collections: { create: unique(input.collectionIds).map((collectionId) => ({ collectionId })) },
     },
     include: productInclude,
   });
@@ -356,7 +426,7 @@ export const createProduct = async (input: ProductWriteInput, allowWithoutImage:
 };
 
 export const updateProduct = async (id: number, input: ProductWriteInput, allowWithoutImage: boolean) => {
-  const existing = await prisma.product.findUnique({ where: { id }, select: { id: true, slug: true, status: true, publishedAt: true } });
+  const existing = await prisma.product.findUnique({ where: { id }, select: { id: true, slug: true, publishedAt: true } });
   if (!existing) throw ApiError.notFound('Product not found.');
 
   if (input.status === 'PUBLISHED') {
@@ -364,58 +434,51 @@ export const updateProduct = async (id: number, input: ProductWriteInput, allowW
     if (problems.length > 0) throw ApiError.validation('This product cannot be published yet.', problems);
   }
 
+  await Promise.all([assertSkuAvailable(input.sku.trim(), id), assertReferencesExist(input)]);
+
   const requestedSlug = input.slug ?? existing.slug;
   const slug =
     requestedSlug === existing.slug
       ? existing.slug
       : await uniqueSlug(requestedSlug, (candidate) => slugExists(candidate, id));
 
-  const product = await prisma.$transaction(async (tx) => {
-    await tx.productTranslation.deleteMany({ where: { productId: id } });
-    await tx.productImage.deleteMany({ where: { productId: id } });
-    await tx.productCategory.deleteMany({ where: { productId: id } });
-    await tx.productCollection.deleteMany({ where: { productId: id } });
+  const translations = translationRows(input.translations).map((row) => ({ ...row, productId: id }));
+  const images = normalizeImages(input.images).map((image) => ({ ...image, productId: id }));
+  const categories = unique(input.categoryIds).map((categoryId) => ({ productId: id, categoryId }));
+  const collections = unique(input.collectionIds).map((collectionId) => ({ productId: id, collectionId }));
 
-    return tx.product.update({
+  /*
+   * One batched transaction: the statements are applied atomically, and each
+   * relation is rewritten with a single insert rather than one per row.
+   *
+   * This used to be an interactive `$transaction(async (tx) => …)`. Prisma
+   * closes those after five seconds, and rewriting a product's relations took
+   * about two dozen round trips. Against the remote production database that
+   * outlasted the limit (P2028), so editing an existing product failed with
+   * "Something went wrong" while creating one still worked.
+   */
+  await prisma.$transaction([
+    prisma.productTranslation.deleteMany({ where: { productId: id } }),
+    prisma.productImage.deleteMany({ where: { productId: id } }),
+    prisma.productCategory.deleteMany({ where: { productId: id } }),
+    prisma.productCollection.deleteMany({ where: { productId: id } }),
+    prisma.product.update({
       where: { id },
       data: {
         slug,
-        sku: input.sku.trim(),
-        brandName: input.brandName,
-        status: input.status,
-        fragranceType: input.fragranceType,
-        audience: input.audience,
-        sizeMl: input.sizeMl,
-        priceUsd: new Prisma.Decimal(input.priceUsd),
-        priceAed: input.priceAed ? new Prisma.Decimal(input.priceAed) : null,
-        compareAtPriceUsd: input.compareAtPriceUsd ? new Prisma.Decimal(input.compareAtPriceUsd) : null,
-        compareAtPriceAed: input.compareAtPriceAed ? new Prisma.Decimal(input.compareAtPriceAed) : null,
-        stockQuantity: input.stockQuantity,
-        lowStockThreshold: input.lowStockThreshold,
-        processingMinDays: input.processingMinDays,
-        processingMaxDays: input.processingMaxDays,
-        deliveryMinDays: input.deliveryMinDays,
-        deliveryMaxDays: input.deliveryMaxDays,
-        ingredients: input.ingredients,
-        featured: input.featured,
-        bestseller: input.bestseller,
-        newArrival: input.newArrival,
-        allowWhatsAppOrder: input.allowWhatsAppOrder,
-        sortOrder: input.sortOrder,
-        model3dGlbUrl: input.model3dGlbUrl,
-        model3dUsdzUrl: input.model3dUsdzUrl,
+        ...productScalars(input),
         // The first publication stamps publishedAt; later edits keep it.
         publishedAt: input.status === 'PUBLISHED' ? existing.publishedAt ?? new Date() : existing.publishedAt,
-        translations: { create: translationRows(input.translations) },
-        images: { create: normalizeImages(input.images) },
-        categories: { create: input.categoryIds.map((categoryId) => ({ categoryId })) },
-        collections: { create: input.collectionIds.map((collectionId) => ({ collectionId })) },
       },
-      include: productInclude,
-    });
-  });
+      select: { id: true },
+    }),
+    ...(translations.length > 0 ? [prisma.productTranslation.createMany({ data: translations })] : []),
+    ...(images.length > 0 ? [prisma.productImage.createMany({ data: images })] : []),
+    ...(categories.length > 0 ? [prisma.productCategory.createMany({ data: categories })] : []),
+    ...(collections.length > 0 ? [prisma.productCollection.createMany({ data: collections })] : []),
+  ]);
 
-  return serializeProductForAdmin(product);
+  return getAdminProduct(id);
 };
 
 export const setProductStatus = async (id: number, status: ProductStatus) => {
