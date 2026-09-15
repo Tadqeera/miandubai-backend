@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { env } from '../config/env.js';
 import { asyncHandler } from '../lib/http.js';
 import { SUPPORTED_LOCALES } from '../lib/locale.js';
@@ -9,7 +9,13 @@ import { listLegalForSitemap } from '../modules/legal/service.js';
 
 export const seoRouter = Router();
 
-const STATIC_PATHS = ['', '/shop', '/collections', '/about', '/contact', '/faq'] as const;
+/**
+ * Canonical storefront pages. Redirecting paths (`/shop`, `/collections`) are
+ * never listed: a sitemap should only name URLs that answer 200 themselves.
+ * Journal articles live in the storefront build, which lists them in its own
+ * `sitemap-pages.xml`.
+ */
+const STATIC_PATHS = ['', '/collection', '/about', '/contact', '/faq', '/legal', '/blog'] as const;
 
 const escapeXml = (value: string) =>
   value.replace(/[<>&'"]/g, (char) => {
@@ -40,11 +46,14 @@ interface SitemapEntry {
   changefreq: string;
 }
 
+const staticEntries = (): SitemapEntry[] =>
+  STATIC_PATHS.map((path) => ({ path, priority: path === '' ? '1.0' : '0.8', changefreq: 'weekly' }));
+
 /**
- * Locale-aware sitemap. Drafts, archived and soft-deleted products, the bag,
- * the admin app and every private API route are excluded.
+ * Database-driven pages only. Drafts, archived and soft-deleted products, the
+ * bag, the admin app and every private API route are excluded.
  */
-const buildEntries = async (): Promise<SitemapEntry[]> => {
+const catalogEntries = async (): Promise<SitemapEntry[]> => {
   const [products, collections, legal] = await Promise.all([
     listPublishedForSitemap(),
     listCollectionsForSitemap(),
@@ -52,11 +61,6 @@ const buildEntries = async (): Promise<SitemapEntry[]> => {
   ]);
 
   return [
-    ...STATIC_PATHS.map((path) => ({
-      path,
-      priority: path === '' ? '1.0' : '0.8',
-      changefreq: path === '' ? 'weekly' : 'weekly',
-    })),
     ...collections.map((collection) => ({
       path: `/collections/${collection.slug}`,
       lastmod: collection.updatedAt,
@@ -78,40 +82,61 @@ const buildEntries = async (): Promise<SitemapEntry[]> => {
   ];
 };
 
+/** One `<url>` per locale, each naming every language version plus x-default. */
+const renderUrlset = (base: string, entries: SitemapEntry[]) => {
+  const urls = entries
+    .flatMap((entry) =>
+      SUPPORTED_LOCALES.map((locale) => {
+        const loc = `${base}/${locale}${entry.path}`;
+        const alternates = SUPPORTED_LOCALES.map(
+          (alternate) =>
+            `    <xhtml:link rel="alternate" hreflang="${alternate}" href="${escapeXml(`${base}/${alternate}${entry.path}`)}" />`,
+        ).join('\n');
+
+        return [
+          '  <url>',
+          `    <loc>${escapeXml(loc)}</loc>`,
+          alternates,
+          `    <xhtml:link rel="alternate" hreflang="x-default" href="${escapeXml(`${base}/en${entry.path}`)}" />`,
+          entry.lastmod ? `    <lastmod>${entry.lastmod.toISOString().slice(0, 10)}</lastmod>` : '',
+          `    <changefreq>${entry.changefreq}</changefreq>`,
+          `    <priority>${entry.priority}</priority>`,
+          '  </url>',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }),
+    )
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${urls}\n</urlset>\n`;
+};
+
+/** Short shared caching: a new product appears within the hour without hammering the database. */
+const sendXml = (res: Response, xml: string) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.type('application/xml').send(xml);
+};
+
+/** Every public page, for direct submission of the API-hosted sitemap. */
 seoRouter.get(
   '/sitemap.xml',
   asyncHandler(async (_req, res) => {
-    const base = await siteBase();
-    const entries = await buildEntries();
+    const [base, catalog] = await Promise.all([siteBase(), catalogEntries()]);
+    sendXml(res, renderUrlset(base, [...staticEntries(), ...catalog]));
+  }),
+);
 
-    const urls = entries
-      .flatMap((entry) =>
-        SUPPORTED_LOCALES.map((locale) => {
-          const loc = `${base}/${locale}${entry.path}`;
-          const alternates = SUPPORTED_LOCALES.map(
-            (alternate) =>
-              `    <xhtml:link rel="alternate" hreflang="${alternate}" href="${escapeXml(`${base}/${alternate}${entry.path}`)}" />`,
-          ).join('\n');
-
-          return [
-            '  <url>',
-            `    <loc>${escapeXml(loc)}</loc>`,
-            alternates,
-            `    <xhtml:link rel="alternate" hreflang="x-default" href="${escapeXml(`${base}/en${entry.path}`)}" />`,
-            entry.lastmod ? `    <lastmod>${entry.lastmod.toISOString().slice(0, 10)}</lastmod>` : '',
-            `    <changefreq>${entry.changefreq}</changefreq>`,
-            `    <priority>${entry.priority}</priority>`,
-            '  </url>',
-          ]
-            .filter(Boolean)
-            .join('\n');
-        }),
-      )
-      .join('\n');
-
-    res.type('application/xml').send(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${urls}\n</urlset>\n`,
-    );
+/**
+ * Products, collections and policies only. The storefront's `/sitemap.xml` is
+ * a sitemap index that proxies this file alongside its own build-time list of
+ * static pages and journal articles, so nothing is listed twice.
+ */
+seoRouter.get(
+  '/sitemap-catalog.xml',
+  asyncHandler(async (_req, res) => {
+    const [base, catalog] = await Promise.all([siteBase(), catalogEntries()]);
+    sendXml(res, renderUrlset(base, catalog));
   }),
 );
 

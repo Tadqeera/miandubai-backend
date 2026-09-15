@@ -3,7 +3,7 @@ import type { AdminRole } from '@prisma/client';
 import { env } from '../config/env.js';
 import { ApiError } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, verifySessionToken } from '../modules/auth/tokens.js';
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, csrfTokensMatch, verifySessionToken } from '../modules/auth/tokens.js';
 
 export interface AuthenticatedAdmin {
   id: number;
@@ -68,8 +68,9 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
  * Double-submit CSRF guard for the cookie-authenticated admin API. The token
- * lives in a readable cookie and must be echoed back in a header, which a
- * cross-site page cannot do.
+ * lives in a cookie and must be echoed back in a header, which a cross-site
+ * page cannot do. The admin app obtains the value from `/auth/login`,
+ * `/auth/me` or `/auth/csrf` (see `ensureCsrfToken`).
  */
 export const csrfGuard: RequestHandler = (req, _res, next) => {
   if (SAFE_METHODS.has(req.method)) {
@@ -81,11 +82,11 @@ export const csrfGuard: RequestHandler = (req, _res, next) => {
   const headerToken = req.get(CSRF_HEADER_NAME);
 
   if (typeof cookieToken !== 'string' || typeof headerToken !== 'string' || cookieToken.length === 0) {
-    next(ApiError.forbidden('Missing CSRF token.'));
+    next(ApiError.csrf('Missing CSRF token.'));
     return;
   }
-  if (cookieToken !== headerToken) {
-    next(ApiError.forbidden('Invalid CSRF token.'));
+  if (!csrfTokensMatch(cookieToken, headerToken)) {
+    next(ApiError.csrf('Invalid CSRF token.'));
     return;
   }
   next();

@@ -27,7 +27,7 @@ export const CONTENT_SEED: ContentSeed[] = [
   {
     key: 'announcement',
     translations: [
-      { locale: 'en', heading: 'California delivery', body: 'Estimated 2–5 business days' },
+      { locale: 'en', heading: 'California delivery', body: 'Estimated 2 to 5 business days' },
       { locale: 'fr', heading: 'Livraison en Californie', body: 'Estimation de 2 à 5 jours ouvrés' },
       { locale: 'es', heading: 'Entrega en California', body: 'Estimación de 2 a 5 días hábiles' },
     ],
@@ -80,7 +80,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         eyebrow: 'The House',
         heading: 'The House of Mian Dubai',
         body:
-          'Mian Dubai is a fragrance house built on restraint. We are interested in the moment a scent stops being a product and becomes a way of entering a room.\n\nEach composition is assembled deliberately — chosen for how it develops on skin over hours, not for how loudly it opens. Nothing leaves us until it holds together from the first minute to the last.\n\nWe keep our range deliberately small. A house is judged by what it declines to release.',
+          'Mian Dubai is a fragrance house built on restraint. We are interested in the moment a scent stops being a product and becomes a way of entering a room.\n\nEach composition is assembled deliberately, chosen for how it develops on skin over hours, not for how loudly it opens. Nothing leaves us until it holds together from the first minute to the last.\n\nWe keep our range deliberately small. A house is judged by what it declines to release.',
         ctaLabel: 'Read our story',
         ctaHref: '/about',
       },
@@ -89,7 +89,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         eyebrow: 'La maison',
         heading: 'La maison Mian Dubai',
         body:
-          'Mian Dubai est une maison de parfum fondée sur la retenue. Nous nous intéressons à l’instant où un parfum cesse d’être un produit pour devenir une manière d’entrer dans une pièce.\n\nChaque composition est assemblée avec intention — choisie pour la façon dont elle évolue sur la peau au fil des heures, non pour la force de son ouverture. Rien ne nous quitte avant de tenir de la première minute à la dernière.\n\nNous gardons notre gamme volontairement restreinte. Une maison se juge à ce qu’elle renonce à publier.',
+          'Mian Dubai est une maison de parfum fondée sur la retenue. Nous nous intéressons à l’instant où un parfum cesse d’être un produit pour devenir une manière d’entrer dans une pièce.\n\nChaque composition est assemblée avec intention, choisie pour la façon dont elle évolue sur la peau au fil des heures, non pour la force de son ouverture. Rien ne nous quitte avant de tenir de la première minute à la dernière.\n\nNous gardons notre gamme volontairement restreinte. Une maison se juge à ce qu’elle renonce à publier.',
         ctaLabel: 'Lire notre histoire',
         ctaHref: '/about',
       },
@@ -139,7 +139,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         items: [
           {
             title: 'Top notes',
-            text: 'The first impression — bright, immediate and fleeting. An introduction, never the conclusion.',
+            text: 'The first impression: bright, immediate and fleeting. An introduction, never the conclusion.',
           },
           {
             title: 'Heart notes',
@@ -159,7 +159,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         items: [
           {
             title: 'Notes de tête',
-            text: 'La première impression — vive, immédiate et éphémère. Une introduction, jamais une conclusion.',
+            text: 'La première impression : vive, immédiate et éphémère. Une introduction, jamais une conclusion.',
           },
           {
             title: 'Notes de cœur',
@@ -200,14 +200,14 @@ export const CONTENT_SEED: ContentSeed[] = [
         locale: 'en',
         eyebrow: 'Personal assistance',
         heading: 'Need help choosing your scent?',
-        body: 'Tell us what you wear now, what you want to be remembered for, and where you will be wearing it. We will point you to the right composition — and say so plainly if none of ours is right for you.',
+        body: 'Tell us what you wear now, what you want to be remembered for, and where you will be wearing it. We will point you to the right composition, and say so plainly if none of ours is right for you.',
         ctaLabel: 'Speak with Mian Dubai',
       },
       {
         locale: 'fr',
         eyebrow: 'Assistance personnelle',
         heading: 'Besoin d’aide pour choisir votre parfum ?',
-        body: 'Dites-nous ce que vous portez aujourd’hui, ce dont vous souhaitez qu’on se souvienne, et dans quel cadre vous le porterez. Nous vous orienterons vers la bonne composition — et vous le dirons franchement si aucune des nôtres ne vous convient.',
+        body: 'Dites-nous ce que vous portez aujourd’hui, ce dont vous souhaitez qu’on se souvienne, et dans quel cadre vous le porterez. Nous vous orienterons vers la bonne composition, et vous le dirons franchement si aucune des nôtres ne vous convient.',
         ctaLabel: 'Parler à Mian Dubai',
       },
       {
@@ -229,7 +229,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         items: [
           { title: 'Presented as received', text: 'Sealed bottles, exactly as supplied to us.' },
           { title: 'Packed with care', text: 'Protected for transit, not padded for show.' },
-          { title: 'California delivery', text: 'Estimated 2–5 business days, updated if that changes.' },
+          { title: 'California delivery', text: 'Estimated 2 to 5 business days, updated if that changes.' },
           { title: 'Personal guidance', text: 'Speak directly with Mian Dubai for fragrance assistance.' },
         ],
       },
@@ -289,7 +289,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         heading: 'Built on restraint',
         subheading: 'A fragrance house is defined less by what it releases than by what it holds back.',
         body:
-          'Mian Dubai began with a simple dissatisfaction: most fragrances announce themselves loudly and then disappear. We wanted the opposite — compositions that arrive quietly and stay.\n\nThat principle governs everything. We would rather offer a short range we can stand behind entirely than a long one padded out to look substantial.',
+          'Mian Dubai began with a simple dissatisfaction: most fragrances announce themselves loudly and then disappear. We wanted the opposite: compositions that arrive quietly and stay.\n\nThat principle governs everything. We would rather offer a short range we can stand behind entirely than a long one padded out to look substantial.',
       },
       {
         locale: 'fr',
@@ -297,7 +297,7 @@ export const CONTENT_SEED: ContentSeed[] = [
         heading: 'Fondée sur la retenue',
         subheading: 'Une maison de parfum se définit moins par ce qu’elle publie que par ce qu’elle retient.',
         body:
-          'Mian Dubai est née d’une insatisfaction simple : la plupart des parfums s’annoncent bruyamment puis disparaissent. Nous voulions l’inverse — des compositions qui arrivent discrètement et demeurent.\n\nCe principe gouverne tout. Nous préférons une gamme courte que nous assumons entièrement à une gamme longue étoffée pour paraître consistante.',
+          'Mian Dubai est née d’une insatisfaction simple : la plupart des parfums s’annoncent bruyamment puis disparaissent. Nous voulions l’inverse : des compositions qui arrivent discrètement et demeurent.\n\nCe principe gouverne tout. Nous préférons une gamme courte que nous assumons entièrement à une gamme longue étoffée pour paraître consistante.',
       },
       {
         locale: 'es',
@@ -316,13 +316,13 @@ export const CONTENT_SEED: ContentSeed[] = [
         locale: 'en',
         heading: 'How we compose',
         body:
-          'A composition is judged over hours, not seconds. We assess each one on skin through a full wear — the opening, the turn into the heart, and what remains at the end of a day.\n\nWe publish the note structure of every fragrance so you can read it before you commit. Where something is not listed, it is because we do not yet have it to give you — not because we are withholding it.',
+          'A composition is judged over hours, not seconds. We assess each one on skin through a full wear: the opening, the turn into the heart, and what remains at the end of a day.\n\nWe publish the note structure of every fragrance so you can read it before you commit. Where something is not listed, it is because we do not yet have it to give you, not because we are withholding it.',
       },
       {
         locale: 'fr',
         heading: 'Notre manière de composer',
         body:
-          'Une composition se juge sur des heures, non sur des secondes. Nous évaluons chacune d’elles sur la peau, du début à la fin — l’ouverture, le passage au cœur, et ce qui subsiste en fin de journée.\n\nNous publions la structure des notes de chaque parfum afin que vous puissiez la lire avant de vous engager. Si un élément n’apparaît pas, c’est que nous ne l’avons pas encore — non que nous le dissimulions.',
+          'Une composition se juge sur des heures, non sur des secondes. Nous évaluons chacune d’elles sur la peau, du début à la fin : l’ouverture, le passage au cœur, et ce qui subsiste en fin de journée.\n\nNous publions la structure des notes de chaque parfum afin que vous puissiez la lire avant de vous engager. Si un élément n’apparaît pas, c’est que nous ne l’avons pas encore, non que nous le dissimulions.',
       },
       {
         locale: 'es',
@@ -369,7 +369,7 @@ export const CONTENT_SEED: ContentSeed[] = [
           },
           {
             question: 'How long does delivery take?',
-            answer: 'Our current estimate is 2–5 business days from the moment your order is confirmed. It is an estimate rather than a guaranteed date, and some products show their own estimate on their product page.',
+            answer: 'Our current estimate is 2 to 5 business days from the moment your order is confirmed. It is an estimate rather than a guaranteed date, and some products show their own estimate on their product page.',
           },
           {
             question: 'How can I place an order?',
@@ -377,7 +377,7 @@ export const CONTENT_SEED: ContentSeed[] = [
           },
           {
             question: 'Can I order through WhatsApp?',
-            answer: 'Yes — that is currently how every order is completed. There is no online payment form on this site. Your bag becomes a clear, itemised message that you send to us, and we reply personally.',
+            answer: 'Yes, that is currently how every order is completed. There is no online payment form on this site. Your bag becomes a clear, itemised message that you send to us, and we reply personally.',
           },
           {
             question: 'How should perfume be stored?',
@@ -389,7 +389,7 @@ export const CONTENT_SEED: ContentSeed[] = [
           },
           {
             question: 'Can I return an opened fragrance?',
-            answer: 'Generally no — once a bottle has been opened or used we cannot accept it back for resale, for hygiene reasons. That restriction does not apply if the item is the wrong product, arrived damaged or is defective, and it does not affect rights you have under applicable law that cannot be waived. Our Returns policy has the detail.',
+            answer: 'Generally no. Once a bottle has been opened or used we cannot accept it back for resale, for hygiene reasons. That restriction does not apply if the item is the wrong product, arrived damaged or is defective, and it does not affect rights you have under applicable law that cannot be waived. Our Returns policy has the detail.',
           },
           {
             question: 'How can I contact Mian Dubai?',
@@ -416,7 +416,7 @@ export const CONTENT_SEED: ContentSeed[] = [
           },
           {
             question: 'Puis-je commander via WhatsApp ?',
-            answer: 'Oui — c’est actuellement ainsi que toute commande se conclut. Ce site ne comporte aucun formulaire de paiement en ligne. Votre panier devient un message détaillé et clair que vous nous envoyez, et nous vous répondons personnellement.',
+            answer: 'Oui, c’est actuellement ainsi que toute commande se conclut. Ce site ne comporte aucun formulaire de paiement en ligne. Votre panier devient un message détaillé et clair que vous nous envoyez, et nous vous répondons personnellement.',
           },
           {
             question: 'Comment conserver un parfum ?',

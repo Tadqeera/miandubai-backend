@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler, hashIp } from '../../lib/http.js';
 import { csrfGuard, requireAdmin } from '../../middleware/auth.js';
@@ -6,7 +6,10 @@ import { loginLimiter } from '../../middleware/rateLimit.js';
 import { validate } from '../../middleware/validate.js';
 import { recordAudit } from '../audit/service.js';
 import { authenticateAdmin, changeAdminPassword, serializeAdmin } from './service.js';
-import { clearSessionCookies, issueSessionCookies, signSessionToken } from './tokens.js';
+import { clearSessionCookies, ensureCsrfToken, issueSessionCookies, signSessionToken } from './tokens.js';
+
+/** Responses carrying a CSRF token must never be stored by a browser or proxy cache. */
+const noStore = (res: Response) => res.setHeader('Cache-Control', 'no-store');
 
 const loginSchema = z.object({
   email: z.string().email('Enter a valid email address.').max(191),
@@ -34,6 +37,7 @@ authRouter.post(
 
       await recordAudit({ adminUserId: admin.id, action: 'ADMIN_LOGIN', ipHash: hashIp(req) });
 
+      noStore(res);
       res.json({ data: { admin: serializeAdmin(admin), csrfToken } });
     } catch (error) {
       await recordAudit({
@@ -58,16 +62,34 @@ authRouter.post(
   }),
 );
 
+/**
+ * The signed-in administrator, plus the CSRF token for this session so a page
+ * reload can resume writing without a separate round trip.
+ */
 authRouter.get(
   '/me',
   requireAdmin,
   asyncHandler(async (req, res) => {
     const admin = req.admin!;
+    const csrfToken = ensureCsrfToken(req, res);
+    noStore(res);
     res.json({
       data: {
         admin: { id: admin.id, email: admin.email, displayName: admin.displayName, role: admin.role },
+        csrfToken,
       },
     });
+  }),
+);
+
+/** The CSRF token for the current session. Requires a valid session; never issues one. */
+authRouter.get(
+  '/csrf',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const csrfToken = ensureCsrfToken(req, res);
+    noStore(res);
+    res.json({ data: { csrfToken } });
   }),
 );
 

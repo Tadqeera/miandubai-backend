@@ -3,6 +3,7 @@ export type ApiErrorCode =
   | 'VALIDATION_ERROR'
   | 'UNAUTHORIZED'
   | 'FORBIDDEN'
+  | 'CSRF_INVALID'
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'PAYLOAD_TOO_LARGE'
@@ -15,6 +16,7 @@ const statusByCode: Record<ApiErrorCode, number> = {
   VALIDATION_ERROR: 422,
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
+  CSRF_INVALID: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   PAYLOAD_TOO_LARGE: 413,
@@ -50,6 +52,11 @@ export class ApiError extends Error {
 
   static forbidden(message = 'You do not have permission to perform this action.') {
     return new ApiError('FORBIDDEN', message);
+  }
+
+  /** A missing or mismatched CSRF token: still a 403, with its own code so a client can fetch a fresh token. */
+  static csrf(message: string) {
+    return new ApiError('CSRF_INVALID', message);
   }
 
   static notFound(message = 'Resource not found.') {

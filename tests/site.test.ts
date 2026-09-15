@@ -91,11 +91,24 @@ describe('public site endpoints', () => {
     expect(sitemap.headers['content-type']).toContain('xml');
     expect(sitemap.text).toContain('hreflang="fr"');
     expect(sitemap.text).toContain('hreflang="x-default"');
-    expect(sitemap.text).toContain('/en/shop');
+    expect(sitemap.text).toContain('/en/collection<');
     expect(sitemap.text).toContain('/es/contact');
-    // The bag and the admin app are never listed.
+    expect(sitemap.text).toContain('/fr/blog<');
+    // Redirecting paths, the bag and the admin app are never listed.
+    expect(sitemap.text).not.toContain('/shop');
+    expect(sitemap.text).not.toContain('/collections<');
     expect(sitemap.text).not.toContain('/bag');
     expect(sitemap.text).not.toContain('/admin');
+  });
+
+  it('serves a catalogue-only sitemap for the storefront sitemap index', async () => {
+    const response = await request(app).get('/sitemap-catalog.xml').expect(200);
+    expect(response.headers['content-type']).toContain('xml');
+    expect(response.headers['cache-control']).toContain('max-age=3600');
+    expect(response.text).toContain('<urlset');
+    // Static pages belong to the storefront's own sitemap, so they are not repeated here.
+    expect(response.text).not.toContain('/en/about<');
+    expect(response.text).not.toContain('/en<');
   });
 
   it('returns a 404 for an unknown endpoint rather than HTML', async () => {

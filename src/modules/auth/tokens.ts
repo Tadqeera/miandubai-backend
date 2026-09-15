@@ -1,10 +1,15 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import type { CookieOptions, Response } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
 import { env } from '../../config/env.js';
 
 export const CSRF_COOKIE_NAME = 'mdb_csrf';
 export const CSRF_HEADER_NAME = 'x-csrf-token';
+
+/** 32 random bytes, base64url-encoded without padding. */
+const CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+const newCsrfToken = () => crypto.randomBytes(32).toString('base64url');
 
 export interface SessionClaims {
   sub: number;
@@ -52,15 +57,43 @@ const baseCookieOptions = (): CookieOptions => {
   };
 };
 
-export const issueSessionCookies = (res: Response, token: string): string => {
-  const csrfToken = crypto.randomBytes(32).toString('base64url');
-  const maxAge = ttlSeconds() * 1000;
+const setCsrfCookie = (res: Response, csrfToken: string) => {
+  res.cookie(CSRF_COOKIE_NAME, csrfToken, { ...baseCookieOptions(), httpOnly: false, maxAge: ttlSeconds() * 1000 });
+};
 
-  res.cookie(env.AUTH_COOKIE_NAME, token, { ...baseCookieOptions(), maxAge });
-  // Readable by the admin app so it can echo the value back in a header.
-  res.cookie(CSRF_COOKIE_NAME, csrfToken, { ...baseCookieOptions(), httpOnly: false, maxAge });
+export const issueSessionCookies = (res: Response, token: string): string => {
+  const csrfToken = newCsrfToken();
+
+  res.cookie(env.AUTH_COOKIE_NAME, token, { ...baseCookieOptions(), maxAge: ttlSeconds() * 1000 });
+  setCsrfCookie(res, csrfToken);
 
   return csrfToken;
+};
+
+/**
+ * The CSRF token for an authenticated request, re-issuing the cookie when it is
+ * missing or malformed.
+ *
+ * The admin app runs on its own origin (admin.miandubai.com) and cannot read a
+ * cookie the API origin set (api.miandubai.com) through `document.cookie`, so
+ * the token is handed over in the body of a credentialed response instead. CORS
+ * only lets allow-listed origins read that body; a cross-site page can neither
+ * read the token nor set the cookie, so the double-submit check still holds.
+ */
+export const ensureCsrfToken = (req: Request, res: Response): string => {
+  const current = req.cookies?.[CSRF_COOKIE_NAME];
+  if (typeof current === 'string' && CSRF_TOKEN_PATTERN.test(current)) return current;
+
+  const csrfToken = newCsrfToken();
+  setCsrfCookie(res, csrfToken);
+  return csrfToken;
+};
+
+/** Constant-time comparison, so a guess cannot be refined from response timing. */
+export const csrfTokensMatch = (cookieToken: string, headerToken: string): boolean => {
+  const expected = Buffer.from(cookieToken);
+  const received = Buffer.from(headerToken);
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
 };
 
 export const clearSessionCookies = (res: Response) => {

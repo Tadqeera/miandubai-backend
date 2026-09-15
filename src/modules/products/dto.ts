@@ -74,7 +74,7 @@ const serializeImages = (product: ProductWithRelations, locale: Locale, name: st
     imageId: image.id,
     isPrimary: image.isPrimary,
     // Falls back to a descriptive alt rather than leaving it empty.
-    alt: altFor(image, locale) ?? `${product.brandName} ${name}${index > 0 ? ` — view ${index + 1}` : ''}`,
+    alt: altFor(image, locale) ?? `${product.brandName} ${name}${index > 0 ? `, view ${index + 1}` : ''}`,
   }));
 
 const serializeTaxonomy = (
