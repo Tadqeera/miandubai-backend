@@ -105,8 +105,12 @@ export const listPublicProducts = async (query: PublicProductQuery): Promise<Pag
     prisma.product.count({ where }),
   ]);
 
+  // The page being listed is its own comparison set: enough to catch a card
+  // that has taken on the name of another product beside it.
+  const catalogueSlugs = rows.map((row) => row.slug);
+
   return {
-    items: rows.map((row) => serializeProductCard(row, query.locale, settings)),
+    items: rows.map((row) => serializeProductCard(row, query.locale, settings, catalogueSlugs)),
     total,
     page: query.page,
     pageSize: query.pageSize,
@@ -140,15 +144,26 @@ export const getPublicFacets = async () => {
   };
 };
 
+/**
+ * Every published slug — the vocabulary of real product names, which is what
+ * lets a translation that names the wrong fragrance be recognised as such (see
+ * identity.ts). Selecting one column across a small catalogue, alongside the
+ * queries already being made.
+ */
+const publishedSlugs = async (): Promise<string[]> => {
+  const rows = await prisma.product.findMany({ where: PUBLIC_SCOPE, select: { slug: true } });
+  return rows.map((row) => row.slug);
+};
+
 export const getPublicProductBySlug = async (slug: string, locale: Locale) => {
-  const product = await prisma.product.findFirst({
-    where: { slug, ...PUBLIC_SCOPE },
-    include: productInclude,
-  });
+  const [product, settings, catalogueSlugs] = await Promise.all([
+    prisma.product.findFirst({ where: { slug, ...PUBLIC_SCOPE }, include: productInclude }),
+    getSettings(),
+    publishedSlugs(),
+  ]);
   if (!product) throw ApiError.notFound('This fragrance is not available.');
 
-  const settings = await getSettings();
-  return serializeProductDetail(product, locale, settings);
+  return serializeProductDetail(product, locale, settings, catalogueSlugs);
 };
 
 /**
@@ -194,7 +209,12 @@ export const getRelatedProducts = async (slug: string, locale: Locale, limit = 4
     for (const row of rows) picked.set(row.id, row);
   }
 
-  return [...picked.values()].slice(0, limit).map((row) => serializeProductCard(row, locale, settings));
+  const related = [...picked.values()].slice(0, limit);
+  // Including the product these are related to: a related card carrying its
+  // name is precisely the confusion worth catching.
+  const catalogueSlugs = [slug, ...related.map((row) => row.slug)];
+
+  return related.map((row) => serializeProductCard(row, locale, settings, catalogueSlugs));
 };
 
 export const searchProducts = async (term: string, locale: Locale, limit: number) => {
@@ -213,7 +233,8 @@ export const searchProducts = async (term: string, locale: Locale, limit: number
     take: limit,
   });
 
-  return rows.map((row) => serializeProductCard(row, locale, settings));
+  const catalogueSlugs = rows.map((row) => row.slug);
+  return rows.map((row) => serializeProductCard(row, locale, settings, catalogueSlugs));
 };
 
 /**

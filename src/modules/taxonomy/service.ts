@@ -198,14 +198,36 @@ export const listPublicCollections = async (locale: Locale, onlyHome = false) =>
     });
 };
 
+/** How many products are live in the catalogue at all. */
+const publishedProductCount = () => prisma.product.count({ where: { status: 'PUBLISHED', deletedAt: null } });
+
+/**
+ * Whether a collection page is worth indexing in its own right.
+ *
+ * A collection that holds every published product shows exactly what
+ * `/collection` already shows, so indexing it would put two identical pages in
+ * front of the same query — for each of the three languages. Such a page stays
+ * live and crawlable but asks not to be indexed, and it is left out of the
+ * sitemap.
+ *
+ * The test is on the selection itself rather than on a hand-maintained flag, so
+ * the day a collection holds a genuine subset it becomes indexable with no code
+ * change and no one having to remember.
+ */
+export const isDistinctSelection = (productCount: number, totalPublished: number): boolean =>
+  productCount > 0 && productCount < totalPublished;
+
 export const getPublicCollection = async (slug: string, locale: Locale) => {
-  const row = await prisma.collection.findFirst({
-    where: { slug, isActive: true },
-    include: {
-      translations: true,
-      _count: { select: { products: { where: { product: { status: 'PUBLISHED', deletedAt: null } } } } },
-    },
-  });
+  const [row, totalPublished] = await Promise.all([
+    prisma.collection.findFirst({
+      where: { slug, isActive: true },
+      include: {
+        translations: true,
+        _count: { select: { products: { where: { product: { status: 'PUBLISHED', deletedAt: null } } } } },
+      },
+    }),
+    publishedProductCount(),
+  ]);
   if (!row) throw ApiError.notFound('Collection not found.');
 
   const translation = mergeTranslation(row.translations, locale);
@@ -217,6 +239,7 @@ export const getPublicCollection = async (slug: string, locale: Locale) => {
     seoTitle: translation?.seoTitle ?? null,
     seoDescription: translation?.seoDescription ?? translation?.tagline ?? null,
     productCount: row._count.products,
+    indexable: isDistinctSelection(row._count.products, totalPublished),
   };
 };
 
@@ -301,8 +324,25 @@ export const deleteCollection = async (id: number) => {
   return { id };
 };
 
-export const listCollectionsForSitemap = () =>
-  prisma.collection.findMany({
-    where: { isActive: true, products: { some: { product: { status: 'PUBLISHED', deletedAt: null } } } },
-    select: { slug: true, updatedAt: true },
-  });
+/**
+ * Collections a sitemap may name: active, holding published products, and
+ * showing a genuine subset of the catalogue rather than a second copy of it
+ * (see `isDistinctSelection`). A page that answers `noindex` is never listed.
+ */
+export const listCollectionsForSitemap = async () => {
+  const [rows, totalPublished] = await Promise.all([
+    prisma.collection.findMany({
+      where: { isActive: true, products: { some: { product: { status: 'PUBLISHED', deletedAt: null } } } },
+      select: {
+        slug: true,
+        updatedAt: true,
+        _count: { select: { products: { where: { product: { status: 'PUBLISHED', deletedAt: null } } } } },
+      },
+    }),
+    publishedProductCount(),
+  ]);
+
+  return rows
+    .filter((row) => isDistinctSelection(row._count.products, totalPublished))
+    .map((row) => ({ slug: row.slug, updatedAt: row.updatedAt }));
+};

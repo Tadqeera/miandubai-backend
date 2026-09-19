@@ -1,8 +1,10 @@
 import type { Prisma } from '@prisma/client';
 import { mergeTranslation, type Locale } from '../../lib/locale.js';
+import { logger } from '../../lib/logger.js';
 import { convertUsdToAed, fromMinorUnits, toMinorUnits } from '../../lib/money.js';
 import { serializeMedia, type MediaDto } from '../media/service.js';
 import type { SettingValues } from '../settings/registry.js';
+import { namesAnotherProduct, resolveName, tidySpacing, type NameDefect } from './identity.js';
 
 export const productInclude = {
   translations: true,
@@ -68,14 +70,64 @@ export interface ProductImageDto extends MediaDto {
   alt: string | null;
 }
 
-const serializeImages = (product: ProductWithRelations, locale: Locale, name: string): ProductImageDto[] =>
-  product.images.map((image, index) => ({
-    ...serializeMedia(image.mediaAsset),
-    imageId: image.id,
-    isPrimary: image.isPrimary,
-    // Falls back to a descriptive alt rather than leaving it empty.
-    alt: altFor(image, locale) ?? `${product.brandName} ${name}${index > 0 ? `, view ${index + 1}` : ''}`,
-  }));
+const serializeImages = (
+  product: ProductWithRelations,
+  locale: Locale,
+  name: string,
+  identity: { slug: string; brand: string; catalogueSlugs: readonly string[] },
+  defects: NameDefect[],
+): ProductImageDto[] =>
+  product.images.map((image, index) => {
+    // Falls back to a descriptive alt rather than leaving it empty, and never
+    // describes the picture as a different product (see identity.ts). An alt is
+    // free prose — "a test bottle on stone" says nothing about which fragrance
+    // it is — so only a value naming another product is replaced.
+    const fallback = `${product.brandName} ${name}${index > 0 ? `, view ${index + 1}` : ''}`;
+    const resolved = resolveName(`images[${index}].alt`, altFor(image, locale), { ...identity, fallback });
+    defects.push(...resolved.defects);
+
+    return {
+      ...serializeMedia(image.mediaAsset),
+      imageId: image.id,
+      isPrimary: image.isPrimary,
+      alt: resolved.value,
+    };
+  });
+
+/**
+ * Says once, in the log, that a translation row needs correcting in the
+ * administration. Deduplicated per product and language, because a card is
+ * serialised on every listing request and this must not become noise.
+ */
+const reportedDefects = new Set<string>();
+
+const reportNameDefects = (slug: string, locale: Locale, defects: readonly NameDefect[]) => {
+  for (const defect of defects) {
+    // Spacing is tidied silently; it is a formatting slip, not a wrong answer.
+    if (defect.reason === 'spacing') continue;
+    const key = `${slug}:${locale}:${defect.field}:${defect.reason}`;
+    if (reportedDefects.has(key)) continue;
+    reportedDefects.add(key);
+    logger.warn(
+      { slug, locale, field: defect.field, reason: defect.reason, stored: defect.value },
+      'Product translation corrected on the way out; fix this row in the administration.',
+    );
+  }
+};
+
+/**
+ * An SEO title is kept whole — the brand suffix belongs in a `<title>`, unlike
+ * in a product name — but it is dropped entirely if it names a different
+ * product, so the page falls back to deriving a title from the corrected name.
+ */
+const resolveSeoTitle = (
+  raw: string | null | undefined,
+  { slug, catalogueSlugs }: { slug: string; catalogueSlugs: readonly string[] },
+): string | null => {
+  const value = tidySpacing(raw ?? '');
+  if (!value) return null;
+  return namesAnotherProduct(value, slug, catalogueSlugs) ? null : value;
+};
 
 const serializeTaxonomy = (
   rows: Array<{ slug: string; translations: Array<{ locale: string; name: string }> }>,
@@ -127,14 +179,62 @@ export interface ProductDetailDto extends ProductCardDto {
   updatedAt: string;
 }
 
-export const serializeProductCard = (
+interface ResolvedIdentity {
+  name: string;
+  images: ProductImageDto[];
+  identity: { slug: string; brand: string; catalogueSlugs: readonly string[] };
+}
+
+/**
+ * The other products a translation could have been confused with.
+ *
+ * Callers that are already listing products pass the slugs they have in hand;
+ * a single product page passes the catalogue's slugs, which is one small query.
+ * An empty list simply means the wrong-product check does not run, and the
+ * names are cleaned but never rewritten.
+ */
+export type CatalogueSlugs = readonly string[];
+
+/**
+ * This product's name and pictures in one language, with both translation
+ * faults corrected and each correction reported once.
+ *
+ * Resolved a single time per serialisation and shared by the card and the
+ * detail record, so a detail request does not repeat the work — or the warning.
+ */
+const resolveProductIdentity = (
   product: ProductWithRelations,
   locale: Locale,
   settings: SettingValues,
+  catalogueSlugs: CatalogueSlugs,
+): ResolvedIdentity => {
+  const translation = mergeTranslation(product.translations, locale);
+  const defects: NameDefect[] = [];
+
+  // The English row is this product's identity: a translation may restate it in
+  // another language but may never turn it into a different product.
+  const englishName = tidySpacing(
+    product.translations.find((row) => row.locale === 'en')?.name ?? translation?.name ?? product.sku,
+  );
+  const identity = { slug: product.slug, brand: settings['brand.displayName'], catalogueSlugs };
+
+  const resolvedName = resolveName('name', translation?.name, { ...identity, fallback: englishName });
+  defects.push(...resolvedName.defects);
+  const name = resolvedName.value;
+
+  const images = serializeImages(product, locale, name, identity, defects);
+  reportNameDefects(product.slug, locale, defects);
+
+  return { name, images, identity };
+};
+
+const buildCard = (
+  product: ProductWithRelations,
+  locale: Locale,
+  settings: SettingValues,
+  { name, images }: ResolvedIdentity,
 ): ProductCardDto => {
   const translation = mergeTranslation(product.translations, locale);
-  const name = translation?.name ?? product.sku;
-  const images = serializeImages(product, locale, name);
 
   return {
     id: product.id,
@@ -166,12 +266,22 @@ export const serializeProductCard = (
   };
 };
 
+export const serializeProductCard = (
+  product: ProductWithRelations,
+  locale: Locale,
+  settings: SettingValues,
+  catalogueSlugs: CatalogueSlugs = [],
+): ProductCardDto =>
+  buildCard(product, locale, settings, resolveProductIdentity(product, locale, settings, catalogueSlugs));
+
 export const serializeProductDetail = (
   product: ProductWithRelations,
   locale: Locale,
   settings: SettingValues,
+  catalogueSlugs: CatalogueSlugs = [],
 ): ProductDetailDto => {
-  const card = serializeProductCard(product, locale, settings);
+  const resolved = resolveProductIdentity(product, locale, settings, catalogueSlugs);
+  const card = buildCard(product, locale, settings, resolved);
   const translation = mergeTranslation(product.translations, locale);
 
   // A per-product override of 0 days means "not recorded", not "same day" —
@@ -200,9 +310,12 @@ export const serializeProductDetail = (
     howToUse: translation?.howToUse ?? null,
     safetyText: translation?.safetyText ?? null,
     ingredients: product.ingredients,
-    seoTitle: translation?.seoTitle ?? null,
+    seoTitle: resolveSeoTitle(translation?.seoTitle, {
+      slug: product.slug,
+      catalogueSlugs: resolved.identity.catalogueSlugs,
+    }),
     seoDescription: translation?.seoDescription ?? translation?.shortDescription ?? null,
-    images: serializeImages(product, locale, card.name),
+    images: resolved.images,
     delivery: { minDays: deliveryFloor, maxDays: deliveryCeiling },
     processing:
       processingMin === null
